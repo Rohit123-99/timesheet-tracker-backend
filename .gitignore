@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Virtual env
+.venv/
+venv/
+
+# Build/dist
+build/
+dist/
+*.spec
+
+# Runtime data
+*.db
+*.sqlite
+*.sqlite3
+*.log
+Weekly_Report*.pdf
+Timesheet_Data_*.json
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local env
+.env
+.env.*
+!.env.example
