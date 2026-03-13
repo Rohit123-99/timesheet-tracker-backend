@@ -41,6 +41,36 @@ class ApiBridge:
             return None
         return selection if isinstance(selection, str) else selection[0]
 
+    def minimize_window(self):
+        window = webview.windows[0] if webview.windows else None
+        if not window:
+            return False
+        try:
+            window.minimize()
+            return True
+        except Exception:
+            return False
+
+    def toggle_fullscreen_window(self):
+        window = webview.windows[0] if webview.windows else None
+        if not window:
+            return False
+        try:
+            window.toggle_fullscreen()
+            return True
+        except Exception:
+            return False
+
+    def close_window(self):
+        window = webview.windows[0] if webview.windows else None
+        if not window:
+            return False
+        try:
+            window.destroy()
+            return True
+        except Exception:
+            return False
+
 if __name__ == "__main__":
     # Start the FastAPI server on a background thread
     server_thread = threading.Thread(target=start_server, daemon=True)
@@ -75,6 +105,7 @@ if __name__ == "__main__":
         width=1200, 
         height=800,
         min_size=(900, 600),
+        fullscreen=True,
         background_color='#1A1A1A'
     )
     
