@@ -1,20 +1,23 @@
 import PyInstaller.__main__
 import os
-import shutil
 
 if __name__ == '__main__':
     print("Packaging Timesheet Tracker using PyInstaller...")
+
+    app_mode = os.environ.get("APP_MODE", "production").strip().lower()
+    exe_name = "timesheet-test" if app_mode in {"testing", "test"} else "timesheet"
     
     # We require the Vite output folder to avoid bundling stale legacy builds
-    ui_folder = "Timesheet/dist"
+    ui_folder_candidates = ["../frontend/dist", "Timesheet/dist"]
+    ui_folder = next((p for p in ui_folder_candidates if os.path.exists(p)), None)
 
-    if not os.path.exists(ui_folder):
+    if not ui_folder:
         print("ERROR: React UI dist folder not found! Please run 'npm run build' inside the Timesheet directory first.")
         exit(1)
 
     PyInstaller.__main__.run([
         'run.py',                         # Main entry point triggering pywebview
-        '--name=TimesheetTracker',        # Name of the exe
+        f'--name={exe_name}',             # Name of the exe
         '--windowed',                     # No console window
         '--onefile',                      # Build a single executable file
         '--noconfirm',                    # Overwrite existing dist/build folders

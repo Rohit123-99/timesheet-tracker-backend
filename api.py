@@ -48,6 +48,61 @@ class AllSettingsUpdate(BaseModel):
 
 class ExportPdfRequest(BaseModel):
     filepath: str
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+
+
+def _resolve_range(start_date: Optional[str] = None, end_date: Optional[str] = None):
+    if start_date and end_date:
+        start = datetime.strptime(start_date, "%Y-%m-%d")
+        end = datetime.strptime(end_date, "%Y-%m-%d")
+    else:
+        end = datetime.now()
+        start = end - timedelta(days=6)
+    if start > end:
+        start, end = end, start
+    return start, end
+
+
+def _build_report_payload(start: datetime, end: datetime):
+    start_str = start.strftime("%Y-%m-%d")
+    end_str = end.strftime("%Y-%m-%d")
+    tasks = database.get_weekly_tasks(start_str, end_str)
+    target = float(database.get_setting("target_hours", "8.0"))
+
+    span_days = (end.date() - start.date()).days + 1
+    span_days = max(span_days, 1)
+
+    daily_stats = []
+    total_hours = 0.0
+
+    for i in range(span_days):
+        d = start + timedelta(days=i)
+        d_str = d.strftime("%Y-%m-%d")
+        day_tasks = [t for t in tasks if t["date"] == d_str]
+        day_total = sum(t["hours"] for t in day_tasks)
+        total_hours += day_total
+        daily_stats.append({
+            "date": d_str,
+            "day_name": d.strftime("%a"),
+            "hours": day_total,
+            "tasks": len(day_tasks)
+        })
+
+    return {
+        "summary": {
+            "total_weekly_hours": total_hours,
+            "daily_average": total_hours / span_days,
+            "daily_target": target
+        },
+        "daily_breakdown": daily_stats,
+        "raw_tasks": tasks,
+        "range": {
+            "start_date": start_str,
+            "end_date": end_str,
+            "days": span_days
+        }
+    }
 
 # --- Settings Endpoints ---
 @app.get("/api/settings")
@@ -134,69 +189,35 @@ def delete_task(task_id: int):
 # --- Reports Endpoints ---
 @app.get("/api/reports/weekly")
 def get_weekly_report():
-    today = datetime.now()
-    start_date = today - timedelta(days=6)
-    
-    start_str = start_date.strftime("%Y-%m-%d")
-    end_str = today.strftime("%Y-%m-%d")
-    
-    tasks = database.get_weekly_tasks(start_str, end_str)
-    target = float(database.get_setting("target_hours", "8.0"))
-    
-    # Pre-fill daily hours
-    daily_stats = []
-    total_weekly = 0.0
-    
-    for i in range(7):
-        d = start_date + timedelta(days=i)
-        d_str = d.strftime("%Y-%m-%d")
-        day_tasks = [t for t in tasks if t["date"] == d_str]
-        
-        day_total = sum(t["hours"] for t in day_tasks)
-        total_weekly += day_total
-        
-        daily_stats.append({
-            "date": d_str,
-            "day_name": d.strftime("%a"),
-            "hours": day_total,
-            "tasks": len(day_tasks)
-        })
-        
-    return {
-        "summary": {
-            "total_weekly_hours": total_weekly,
-            "daily_average": total_weekly / 7.0,
-            "daily_target": target
-        },
-        "daily_breakdown": daily_stats,
-        "raw_tasks": tasks
-    }
+    start, end = _resolve_range()
+    return _build_report_payload(start, end)
+
+
+@app.get("/api/reports/range")
+def get_report_for_range(start_date: str, end_date: str):
+    start, end = _resolve_range(start_date, end_date)
+    return _build_report_payload(start, end)
 
 @app.get("/api/reports/export")
-def export_weekly_pdf():
-    today = datetime.now()
-    start_date = today - timedelta(days=6)
-    
-    start_str = start_date.strftime("%Y-%m-%d")
-    end_str = today.strftime("%Y-%m-%d")
-    
-    tasks = database.get_weekly_tasks(start_str, end_str)
-    target = float(database.get_setting("target_hours", "8.0"))
-    
-    total_weekly = sum(t["hours"] for t in tasks)
-    
+def export_weekly_pdf(start_date: Optional[str] = None, end_date: Optional[str] = None):
+    start, end = _resolve_range(start_date, end_date)
+    payload = _build_report_payload(start, end)
+    tasks = payload["raw_tasks"]
+    total_weekly = payload["summary"]["total_weekly_hours"]
+    target = payload["summary"]["daily_target"]
+
     metrics = {
         "total": total_weekly,
         "target": target,
-        "average": total_weekly / 7.0
+        "average": payload["summary"]["daily_average"]
     }
     
     # Generate the PDF
     filepath = "Weekly_Report.pdf"
     pdf_export.generate_weekly_pdf(
         filepath=filepath,
-        start_date_str=start_str,
-        end_date_str=end_str,
+        start_date_str=payload["range"]["start_date"],
+        end_date_str=payload["range"]["end_date"],
         tasks=tasks,
         metrics=metrics
     )
@@ -205,26 +226,22 @@ def export_weekly_pdf():
 
 @app.post("/api/reports/export/save")
 def export_weekly_pdf_to_path(data: ExportPdfRequest):
-    today = datetime.now()
-    start_date = today - timedelta(days=6)
-
-    start_str = start_date.strftime("%Y-%m-%d")
-    end_str = today.strftime("%Y-%m-%d")
-
-    tasks = database.get_weekly_tasks(start_str, end_str)
-    target = float(database.get_setting("target_hours", "8.0"))
-    total_weekly = sum(t["hours"] for t in tasks)
+    start, end = _resolve_range(data.start_date, data.end_date)
+    payload = _build_report_payload(start, end)
+    tasks = payload["raw_tasks"]
+    total_weekly = payload["summary"]["total_weekly_hours"]
+    target = payload["summary"]["daily_target"]
 
     metrics = {
         "total": total_weekly,
         "target": target,
-        "average": total_weekly / 7.0
+        "average": payload["summary"]["daily_average"]
     }
 
     pdf_export.generate_weekly_pdf(
         filepath=data.filepath,
-        start_date_str=start_str,
-        end_date_str=end_str,
+        start_date_str=payload["range"]["start_date"],
+        end_date_str=payload["range"]["end_date"],
         tasks=tasks,
         metrics=metrics
     )

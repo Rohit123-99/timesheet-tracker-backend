@@ -1,19 +1,56 @@
 import sqlite3
 import os
+import sys
 from datetime import datetime
+
+def _detect_app_mode():
+    """Detect runtime mode from APP_MODE env var or executable name."""
+    env_mode = os.environ.get("APP_MODE", "").strip().lower()
+    if env_mode in {"production", "prod"}:
+        return "production"
+    if env_mode in {"testing", "test"}:
+        return "testing"
+
+    exe_name = os.path.basename(sys.executable).lower()
+    if "test" in exe_name:
+        return "testing"
+    return "production"
+
 
 # Determine persistent path for the database
 def get_db_path():
+    """
+    Database isolation strategy:
+    - production: keep legacy location so existing installed app keeps current data.
+      %APPDATA%/TimesheetTracker/timesheet.db
+    - testing: always isolated.
+      %APPDATA%/TimesheetTracker/testing/timesheet_test.db
+    """
     app_name = "TimesheetTracker"
-    if os.name == 'nt': # Windows
-        base_dir = os.environ.get('APPDATA', os.path.expanduser('~'))
-    else: # Linux/Mac
-        base_dir = os.path.expanduser('~')
-    
-    app_dir = os.path.join(base_dir, app_name)
-    if not os.path.exists(app_dir):
-        os.makedirs(app_dir)
-    return os.path.join(app_dir, "timesheet.db")
+    app_mode = _detect_app_mode()
+
+    if os.name == "nt":  # Windows
+        base_dir = os.environ.get("APPDATA", os.path.expanduser("~"))
+    else:  # Linux/Mac
+        base_dir = os.path.expanduser("~")
+
+    root_dir = os.path.join(base_dir, app_name)
+
+    if app_mode == "testing":
+        db_dir = os.path.join(root_dir, "testing")
+        db_file = "timesheet_test.db"
+    else:
+        db_dir = root_dir
+        db_file = "timesheet.db"
+
+    try:
+        os.makedirs(db_dir, exist_ok=True)
+        return os.path.join(db_dir, db_file)
+    except PermissionError:
+        # Fallback for restricted environments: keep mode-based file names locally.
+        local_dir = os.path.dirname(os.path.abspath(__file__))
+        local_file = "timesheet_test.db" if app_mode == "testing" else "timesheet.db"
+        return os.path.join(local_dir, local_file)
 
 DB_PATH = get_db_path()
 

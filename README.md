@@ -1,4 +1,4 @@
-# Personal Timesheet Tracker (Backend + Desktop Launcher)
+# Personal Timesheet Tracker (v2.0.0)
 
 Offline Windows productivity application for tracking daily work hours, tasks, weekly analytics, and PDF exports.
 
@@ -80,7 +80,18 @@ Open in browser: `http://localhost:3000`
 - PyInstaller (recommended)
 - Electron is **not applicable** for this project because desktop packaging is already handled by Python + pywebview.
 
-### Build command (exact)
+### Quick Build (Unified Script)
+For a complete build of both frontend and backend into an executable, run the provided batch file from the `backend` directory:
+```bat
+cd backend
+build.bat
+```
+This will:
+1.  Prepare the Python virtual environment and install dependencies.
+2.  Install frontend dependencies and build the UI.
+3.  Generate `timesheet.exe` (Production) and `timesheet-test.exe` (Testing) in the `dist` folder.
+
+### Manual Build Command
 From `backend`:
 ```bat
 .\.venv\Scripts\activate.bat
