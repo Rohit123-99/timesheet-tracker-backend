@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 import database
 import pdf_export
+import sprint_importer
 from datetime import datetime, timedelta
 from fastapi.responses import FileResponse
 import os
@@ -50,6 +51,18 @@ class ExportPdfRequest(BaseModel):
     filepath: str
     start_date: Optional[str] = None
     end_date: Optional[str] = None
+
+
+class SprintImportRequest(BaseModel):
+    md_path: str
+    start_date: str
+    replace: Optional[bool] = False
+
+
+class SprintImportInlineRequest(BaseModel):
+    markdown: str
+    start_date: str
+    replace: Optional[bool] = False
 
 
 def _resolve_range(start_date: Optional[str] = None, end_date: Optional[str] = None):
@@ -246,6 +259,36 @@ def export_weekly_pdf_to_path(data: ExportPdfRequest):
         metrics=metrics
     )
     return {"status": "success", "filepath": data.filepath}
+
+@app.post("/api/import/sprint")
+def import_sprint_from_path(payload: SprintImportRequest):
+    """Read a sprint tracker markdown from disk and create Block A/B/C/D tasks."""
+    if not os.path.isfile(payload.md_path):
+        raise HTTPException(status_code=400, detail=f"File not found: {payload.md_path}")
+    try:
+        return sprint_importer.import_sprint_from_path(
+            payload.md_path,
+            payload.start_date,
+            replace=bool(payload.replace),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Cannot read file: {exc}")
+
+
+@app.post("/api/import/sprint/inline")
+def import_sprint_from_inline(payload: SprintImportInlineRequest):
+    """Accept markdown text directly (useful when the UI uploads a file from the browser)."""
+    try:
+        return sprint_importer.import_sprint(
+            payload.markdown,
+            payload.start_date,
+            replace=bool(payload.replace),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
 
 @app.get("/api/export/all")
 def export_all_data():
