@@ -3,31 +3,68 @@ import os
 import sys
 from datetime import datetime
 
+def _bundled_mode_flag():
+    """When PyInstaller bundles us, build.py drops a sentinel `_app_mode_flag.py`
+    into the package so runtime knows which build this is — independent of the
+    .exe filename or any env var. Returns 'production'/'testing' or None.
+    """
+    try:
+        from _app_mode_flag import APP_MODE  # type: ignore
+        normalised = str(APP_MODE).strip().lower()
+        if normalised in {"production", "prod"}:
+            return "production"
+        if normalised in {"testing", "test"}:
+            return "testing"
+    except Exception:
+        pass
+    return None
+
+
 def _detect_app_mode():
-    """Detect runtime mode from APP_MODE env var or executable name."""
+    """Detect runtime mode in this order of precedence:
+
+      1. Bundle sentinel file (`_app_mode_flag.py`) — set by PyInstaller build
+      2. APP_MODE env var — `production`/`prod`, `testing`/`test`, `development`/`dev`
+      3. Executable filename hint — "test" in sys.executable basename
+      4. Frozen exe with no other hint → `production`
+      5. Unfrozen (`python run.py`) with no other hint → `development`
+
+    Returning `development` (instead of `production`) for plain `python run.py` is
+    the key fix: it stops dev work from silently writing to your production DB.
+    """
+    bundled = _bundled_mode_flag()
+    if bundled:
+        return bundled
+
     env_mode = os.environ.get("APP_MODE", "").strip().lower()
     if env_mode in {"production", "prod"}:
         return "production"
     if env_mode in {"testing", "test"}:
         return "testing"
+    if env_mode in {"development", "dev"}:
+        return "development"
 
     exe_name = os.path.basename(sys.executable).lower()
     if "test" in exe_name:
         return "testing"
-    return "production"
+
+    if getattr(sys, "frozen", False):
+        return "production"
+    return "development"
+
+
+APP_MODE = _detect_app_mode()
 
 
 # Determine persistent path for the database
 def get_db_path():
     """
     Database isolation strategy:
-    - production: keep legacy location so existing installed app keeps current data.
-      %APPDATA%/TimesheetTracker/timesheet.db
-    - testing: always isolated.
-      %APPDATA%/TimesheetTracker/testing/timesheet_test.db
+      - production:  %APPDATA%/TimesheetTracker/timesheet.db          (live exe)
+      - testing:     %APPDATA%/TimesheetTracker/testing/timesheet_test.db
+      - development: %APPDATA%/TimesheetTracker/dev/timesheet_dev.db  (python run.py)
     """
     app_name = "TimesheetTracker"
-    app_mode = _detect_app_mode()
 
     if os.name == "nt":  # Windows
         base_dir = os.environ.get("APPDATA", os.path.expanduser("~"))
@@ -36,9 +73,12 @@ def get_db_path():
 
     root_dir = os.path.join(base_dir, app_name)
 
-    if app_mode == "testing":
+    if APP_MODE == "testing":
         db_dir = os.path.join(root_dir, "testing")
         db_file = "timesheet_test.db"
+    elif APP_MODE == "development":
+        db_dir = os.path.join(root_dir, "dev")
+        db_file = "timesheet_dev.db"
     else:
         db_dir = root_dir
         db_file = "timesheet.db"
@@ -49,10 +89,42 @@ def get_db_path():
     except PermissionError:
         # Fallback for restricted environments: keep mode-based file names locally.
         local_dir = os.path.dirname(os.path.abspath(__file__))
-        local_file = "timesheet_test.db" if app_mode == "testing" else "timesheet.db"
+        local_file = {
+            "testing": "timesheet_test.db",
+            "development": "timesheet_dev.db",
+        }.get(APP_MODE, "timesheet.db")
         return os.path.join(local_dir, local_file)
 
 DB_PATH = get_db_path()
+
+
+def _maybe_seed_dev_db_from_production() -> None:
+    """One-time migration: when dev mode starts and `timesheet_dev.db` doesn't
+    exist yet but `timesheet.db` does, copy it across so the user doesn't lose
+    their existing work the first time they run after the isolation fix.
+
+    Only triggers in development mode and only on first dev launch.
+    """
+    if APP_MODE != "development":
+        return
+    if os.path.exists(DB_PATH):
+        return
+
+    # Locate the prod DB alongside our dev DB
+    prod_db = os.path.join(os.path.dirname(os.path.dirname(DB_PATH)), "timesheet.db")
+    if not os.path.exists(prod_db):
+        return
+
+    try:
+        import shutil
+        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+        shutil.copy2(prod_db, DB_PATH)
+    except Exception:
+        # Best-effort — if it fails, init_db() will create a fresh empty DB instead.
+        pass
+
+
+_maybe_seed_dev_db_from_production()
 
 def get_connection():
     """Returns a connection to the SQLite database."""

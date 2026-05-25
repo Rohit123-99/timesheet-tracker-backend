@@ -20,6 +20,9 @@ build/
 dist/
 *.spec
 
+# Generated at build time by build.py — bakes APP_MODE into the bundle
+_app_mode_flag.py
+
 # Runtime data
 *.db
 *.sqlite
