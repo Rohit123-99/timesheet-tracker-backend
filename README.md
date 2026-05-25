@@ -139,8 +139,7 @@ attached to the Block D task's notes.
 ### From the UI (recommended)
 1. Open the app, go to **Settings**.
 2. Scroll to the **Sprint Plan Import** card.
-3. Set the file path (defaults to `C:\Users\Killestro\Study Tracking\SDET_Sprint_Tracker.md`)
-   and the Day 1 date.
+3. Paste the file path to your `SDET_Sprint_Tracker.md` and pick the Day 1 date.
 4. Click **Import Sprint Plan**. A toast shows how many tasks were created.
 5. Open **Tasks** and navigate to the chosen start date — you'll see Block A/B/C/D rows.
 
@@ -151,7 +150,7 @@ see your local path, click **Upload .md instead** to send the file contents dire
 ```bat
 cd backend
 .\.venv\Scripts\activate.bat
-python sprint_importer.py "C:\Users\Killestro\Study Tracking\SDET_Sprint_Tracker.md" 2026-05-26
+python sprint_importer.py "<path-to-your>/SDET_Sprint_Tracker.md" YYYY-MM-DD
 ```
 Add `--replace` to wipe and re-import existing `SDET Sprint` tasks.
 

@@ -8,8 +8,8 @@ Assumptions:
   - One of timesheet.exe / timesheet-test.exe is running on 127.0.0.1:8000
   - You have write access (the script fetches the per-process auth token)
 
-Run:
-  C:\\Users\\Killestro\\Study Tracking\\_workspace\\backend\\.venv\\Scripts\\python.exe test_pomodoro_flow.py
+Run (from the backend folder, venv activated):
+  python test_pomodoro_flow.py
 """
 from __future__ import annotations
 
