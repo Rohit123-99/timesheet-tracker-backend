@@ -2,6 +2,8 @@ import os
 import sys
 import time
 import threading
+import subprocess
+import xml.sax.saxutils as _xml_escape
 import urllib.request
 import urllib.error
 from typing import Optional
@@ -55,8 +57,89 @@ def wait_for_server(timeout_seconds: float = 15.0) -> bool:
     return False
 
 
+def _show_windows_toast(title: str, body: str, scenario: str = "reminder") -> bool:
+    """Show a native Windows 10/11 toast notification.
+
+    Uses PowerShell + Windows Runtime so we don't have to bundle an extra
+    Python dep. The toast appears in the Action Center on top of whatever
+    app the user is currently focused on, plays the Windows alarm sound,
+    and stays on screen until dismissed (scenario='reminder' + duration=long).
+    """
+    if os.name != "nt":
+        return False
+
+    # Escape XML and PowerShell single-quote-string special chars
+    xml_title = _xml_escape.escape(title)
+    xml_body = _xml_escape.escape(body)
+    ps_title = xml_title.replace("'", "''")
+    ps_body = xml_body.replace("'", "''")
+
+    # `scenario="reminder"` keeps the toast on screen until dismissed and
+    # plays the looping alarm sound. `duration="long"` is the fallback for
+    # older WinRT versions that don't understand scenario.
+    ps_script = (
+        '$ErrorActionPreference = "SilentlyContinue"; '
+        '[Windows.UI.Notifications.ToastNotificationManager, '
+        'Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null; '
+        '[Windows.UI.Notifications.ToastNotification, '
+        'Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null; '
+        '[Windows.Data.Xml.Dom.XmlDocument, '
+        'Windows.Data.Xml.Dom.XmlDocument, ContentType=WindowsRuntime] | Out-Null; '
+        "$xml = New-Object Windows.Data.Xml.Dom.XmlDocument; "
+        f"$xml.LoadXml('<toast scenario=\"{scenario}\" duration=\"long\">"
+        '<visual><binding template=\"ToastGeneric\">'
+        f"<text>{ps_title}</text>"
+        f"<text>{ps_body}</text>"
+        '</binding></visual>'
+        '<audio src=\"ms-winsoundevent:Notification.Looping.Alarm\" loop=\"true\"/>'
+        '<actions>'
+        '<action content=\"Dismiss\" arguments=\"dismiss\" activationType=\"system\"/>'
+        '</actions>'
+        "</toast>'); "
+        '$toast = New-Object Windows.UI.Notifications.ToastNotification $xml; '
+        '[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('
+        '"Timesheet Tracker").Show($toast)'
+    )
+
+    try:
+        flags = 0
+        if hasattr(subprocess, "CREATE_NO_WINDOW"):
+            flags = subprocess.CREATE_NO_WINDOW
+        subprocess.Popen(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-WindowStyle", "Hidden",
+                "-ExecutionPolicy", "Bypass",
+                "-Command", ps_script,
+            ],
+            creationflags=flags,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except Exception as exc:
+        print(f"Toast failed: {exc}")
+        return False
+
+
 class ApiBridge:
     """JS-callable bridge exposed via pywebview's js_api."""
+
+    def show_notification(self, title: str, body: str) -> bool:
+        """Pop a Windows toast (Action Center popup) outside the app window.
+
+        Called from the React PomodoroWidget whenever a phase ends — so the
+        user sees the alarm even when working in a different app. Runs the
+        PowerShell subprocess on a background thread so the JS-side promise
+        resolves immediately.
+        """
+        threading.Thread(
+            target=_show_windows_toast,
+            args=(title, body),
+            daemon=True,
+        ).start()
+        return True
 
     def save_file_dialog(self, default_name: str = "Weekly_Report.pdf") -> Optional[str]:
         window = webview.windows[0] if webview.windows else None
