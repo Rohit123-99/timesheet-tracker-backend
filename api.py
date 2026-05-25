@@ -360,6 +360,152 @@ def import_sprint_from_inline(payload: SprintImportInlineRequest):
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@app.get("/api/stats/streak")
+def get_daily_goal_streak():
+    """Consecutive days where total worked >= daily target, working back from today.
+
+    Returns the current streak, the longest streak found in the last 365 days,
+    and the date range scanned.
+    """
+    target = float(database.get_setting("target_hours", "8.0"))
+    today = datetime.now().date()
+    start = today - timedelta(days=365)
+    tasks = database.get_weekly_tasks(start.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d"))
+
+    totals_by_date: dict[str, float] = {}
+    for t in tasks:
+        totals_by_date[t["date"]] = totals_by_date.get(t["date"], 0.0) + float(t.get("hours") or 0)
+
+    current = 0
+    cursor = today
+    while True:
+        key = cursor.strftime("%Y-%m-%d")
+        if totals_by_date.get(key, 0.0) + 1e-9 >= target:
+            current += 1
+            cursor -= timedelta(days=1)
+        else:
+            break
+
+    longest = 0
+    run = 0
+    cursor = start
+    while cursor <= today:
+        key = cursor.strftime("%Y-%m-%d")
+        if totals_by_date.get(key, 0.0) + 1e-9 >= target:
+            run += 1
+            longest = max(longest, run)
+        else:
+            run = 0
+        cursor += timedelta(days=1)
+
+    return {
+        "current_streak": current,
+        "longest_streak": longest,
+        "daily_target": target,
+        "scanned_from": start.strftime("%Y-%m-%d"),
+        "scanned_to": today.strftime("%Y-%m-%d"),
+    }
+
+
+@app.get("/api/sprint/overview")
+def get_sprint_overview():
+    """Roll-up view of all tasks tagged 'SDET Sprint' grouped by day.
+
+    Returns one entry per distinct date, with totals across the 4 Block tasks
+    and a completion flag (worked >= 80% of expected, matching the app's
+    existing 'complete' heuristic).
+    """
+    all_tasks = database.get_all_tasks()
+    sprint_tasks = [t for t in all_tasks if (t.get("category") or "") == "SDET Sprint"]
+
+    by_date: dict[str, dict] = {}
+    for t in sprint_tasks:
+        date = t["date"]
+        bucket = by_date.setdefault(date, {
+            "date": date,
+            "tasks": [],
+            "expected_hours": 0.0,
+            "worked_hours": 0.0,
+        })
+        bucket["tasks"].append({
+            "id": t["id"],
+            "task_name": t["task_name"],
+            "expected_hours": t.get("expected_hours") or 0,
+            "hours": t.get("hours") or 0,
+            "block": _block_letter_from_name(t["task_name"]),
+        })
+        bucket["expected_hours"] += float(t.get("expected_hours") or 0)
+        bucket["worked_hours"] += float(t.get("hours") or 0)
+
+    days = []
+    for entry in sorted(by_date.values(), key=lambda e: e["date"]):
+        completion = (
+            entry["worked_hours"] / entry["expected_hours"]
+            if entry["expected_hours"] > 0 else 0.0
+        )
+        entry["completion_pct"] = round(completion * 100, 1)
+        entry["complete"] = completion >= 0.8
+        entry["day_number"] = _sprint_day_number(entry["tasks"])
+        entry["tasks"].sort(key=lambda x: x.get("block") or "Z")
+        days.append(entry)
+
+    summary = {
+        "total_days": len(days),
+        "completed_days": sum(1 for d in days if d["complete"]),
+        "total_expected": sum(d["expected_hours"] for d in days),
+        "total_worked": sum(d["worked_hours"] for d in days),
+    }
+    summary["overall_pct"] = (
+        round(summary["total_worked"] / summary["total_expected"] * 100, 1)
+        if summary["total_expected"] > 0 else 0.0
+    )
+
+    return {"summary": summary, "days": days}
+
+
+def _block_letter_from_name(name: str) -> Optional[str]:
+    """Pull the 'A'/'B'/'C'/'D' from 'Day 01 · Block A — Learn'."""
+    import re
+    m = re.search(r"Block\s+([ABCD])\b", name)
+    return m.group(1) if m else None
+
+
+def _sprint_day_number(tasks: list[dict]) -> Optional[int]:
+    """Pull the day number from the first task's 'Day NN' prefix."""
+    import re
+    if not tasks:
+        return None
+    m = re.search(r"Day\s+(\d{1,2})\b", tasks[0]["task_name"])
+    return int(m.group(1)) if m else None
+
+
+@app.get("/api/export/csv")
+def export_all_tasks_csv():
+    """Stream all tasks as CSV, sorted by date desc then id desc."""
+    import csv
+    import io
+
+    tasks = database.get_all_tasks()
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "id", "date", "task_name", "category",
+        "expected_hours", "hours", "notes",
+    ])
+    for t in tasks:
+        writer.writerow([
+            t["id"], t["date"], t["task_name"], t.get("category", ""),
+            t.get("expected_hours", 0), t.get("hours", 0),
+            (t.get("notes") or "").replace("\r", " ").replace("\n", " | "),
+        ])
+
+    filename = f"Timesheet_Tasks_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    filepath = filename
+    with open(filepath, "w", encoding="utf-8-sig", newline="") as handle:
+        handle.write(buf.getvalue())
+    return FileResponse(filepath, media_type="text/csv", filename=filename)
+
+
 @app.get("/api/export/all")
 def export_all_data():
     now = datetime.now()
