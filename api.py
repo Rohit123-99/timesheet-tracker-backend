@@ -1,6 +1,8 @@
-from fastapi import FastAPI, HTTPException, Header, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.routing import Route
 from pydantic import BaseModel
 from typing import List, Optional
 import database
@@ -8,10 +10,37 @@ import pdf_export
 import sprint_importer
 from datetime import datetime, timedelta
 import os
+import sys
 import json
 import secrets
 
 app = FastAPI(title="Timesheet Tracker API")
+
+
+def _resource_path(*parts: str) -> str:
+    """Resolve a path relative to either the PyInstaller bundle (frozen) or
+    the backend source directory (dev). Mirrors the helper in run.py."""
+    if getattr(sys, "frozen", False):
+        base = getattr(sys, "_MEIPASS", os.path.abspath("."))
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, *parts)
+
+
+def _find_ui_dir() -> Optional[str]:
+    """Locate the frontend `dist` folder, regardless of frozen/dev mode."""
+    candidates = [
+        _resource_path("ui"),                                          # frozen exe
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend", "dist"),  # dev
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui"),
+    ]
+    for c in candidates:
+        if os.path.isfile(os.path.join(c, "index.html")):
+            return os.path.abspath(c)
+    return None
+
+
+UI_DIR = _find_ui_dir()
 
 
 # ---------------------------------------------------------------------------
@@ -521,3 +550,37 @@ def export_all_data():
         json.dump(payload, f, indent=2)
 
     return FileResponse(filepath, media_type="application/json", filename=filename)
+
+
+# ---------------------------------------------------------------------------
+# Static UI hosting — serves the React build from the SAME ORIGIN as the API.
+#
+# Why: pywebview's WebView2 (Chromium) restricts file://-loaded pages from
+# making cross-origin fetch() calls to http://127.0.0.1:8000 in many setups.
+# Serving the UI from FastAPI itself eliminates the cross-origin boundary
+# entirely. (CORS is still configured for the legacy `npm run dev` flow.)
+# ---------------------------------------------------------------------------
+if UI_DIR is not None:
+    # Mount /assets, /icon-*.png etc. as static files
+    app.mount(
+        "/assets",
+        StaticFiles(directory=os.path.join(UI_DIR, "assets")),
+        name="assets",
+    )
+
+    @app.get("/", include_in_schema=False)
+    def _serve_index():
+        return FileResponse(os.path.join(UI_DIR, "index.html"))
+
+    # SPA fallback: any non-/api path returns index.html so client-side
+    # routing (hash router) works on direct navigation.
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def _serve_spa(full_path: str):
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="API route not found")
+        # If the requested path resolves to a real file in UI_DIR, serve it
+        # (covers favicons, manifest.json, etc.)
+        candidate = os.path.normpath(os.path.join(UI_DIR, full_path))
+        if candidate.startswith(os.path.abspath(UI_DIR)) and os.path.isfile(candidate):
+            return FileResponse(candidate)
+        return FileResponse(os.path.join(UI_DIR, "index.html"))
